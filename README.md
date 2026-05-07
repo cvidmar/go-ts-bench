@@ -1,6 +1,6 @@
 # go-ts-bench
 
-A reproducible benchmark for Docker image builds across machines and operating systems. Runs the same two real-world projects — one Go, one TypeScript — through cold and warm build scenarios and emits a CSV you can collate across machines.
+A reproducible benchmark for Docker image builds across machines and operating systems. Runs real-world projects — one Go, one TypeScript — through cold and warm build scenarios and emits a CSV you can collate across machines.
 
 Built to compare bare-metal macOS, bare-metal Linux, and Linux VPSes on equal footing, but works anywhere Docker and Bash run.
 
@@ -8,25 +8,34 @@ Built to compare bare-metal macOS, bare-metal Linux, and Linux VPSes on equal fo
 
 For each project, two scenarios:
 
-- **Cold build** — build cache wiped before each run (`docker builder prune -af`). Approximates a CI build from scratch. Base images are pulled once during an untimed warmup so the measurement isn't dominated by your network.
-- **Warm build** — build cache kept, but a `.cache-buster` file is touched between runs to invalidate the final `COPY` layer. Approximates the inner-loop "I changed one file, rebuild" experience. Dependency layers stay cached; source-dependent steps re-run.
+- **Cold build** — build cache wiped before each run (`docker builder prune -f`). Approximates a CI build from scratch. Base images are pulled once during an untimed warmup so the measurement isn't dominated by your network.
+- **Warm build** — build cache kept, but a `cache-buster` file is touched between runs to invalidate the final `COPY` layer. Approximates the inner-loop "I changed one file, rebuild" experience. Dependency layers stay cached; source-dependent steps re-run.
 
 [Hyperfine](https://github.com/sharkdp/hyperfine) drives the timing and reports median, mean, stddev, min, and max across runs.
 
-## Sample projects
+## Profiles
 
-| Project | Language | Repo | Why |
-|---|---|---|---|
-| [Caddy](https://github.com/caddyserver/caddy) | Go | `caddyserver/caddy` | Real-world web server, clean multi-stage Dockerfile, ~1–3 min cold build on a modern laptop. |
-| [Excalidraw](https://github.com/excalidraw/excalidraw) | TypeScript | `excalidraw/excalidraw` | Vite + React/TS app. `npm install` exercises small-file IO; the TS/bundler step exercises CPU. |
+The benchmark ships with two profiles — **light** (faster builds, more runs) and **heavy** (longer builds, fewer runs):
 
-Both are pinned to specific tags by default (`v2.8.4` and `v0.17.6`) so every machine builds identical source. The actual commit SHA is recorded in the CSV regardless.
+| Profile | Go project | TS project | Cold runs | Warm runs |
+|---|---|---|---|---|
+| `light` (default) | [Syncthing](https://github.com/syncthing/syncthing) `v2.0.16` | [Verdaccio](https://github.com/verdaccio/verdaccio) `v6.5.2` | 5 | 8 |
+| `heavy` | [Hugo](https://github.com/gohugoio/hugo) `v0.139.0` | [Directus](https://github.com/directus/directus) `v11.17.4` | 3 | 5 |
 
-If you want longer, heavier workloads to amplify hardware differences, swap in [Gitea](https://github.com/go-gitea/gitea) (Go) and [Cal.com](https://github.com/calcom/cal.com) (TypeScript) — both are 5–15 minute builds.
+The heavy profile uses fewer runs because longer builds are less susceptible to external noise, making each measurement more stable on its own.
+
+| Project | Language | Why |
+|---|---|---|
+| [Syncthing](https://github.com/syncthing/syncthing) | Go | Pure Go, multi-stage Dockerfile that compiles from source. ~70s cold build. |
+| [Verdaccio](https://github.com/verdaccio/verdaccio) | TypeScript | npm registry, full `pnpm install` + build from source. ~42s cold build. |
+| [Hugo](https://github.com/gohugoio/hugo) | Go | Static site generator with CGO. Multi-stage build. ~160s cold build. |
+| [Directus](https://github.com/directus/directus) | TypeScript | Large monorepo, full `pnpm install` + build. ~135s cold build. |
+
+All projects are pinned to specific tags so every machine builds identical source. The actual commit SHA is recorded in the CSV regardless.
 
 ## Requirements
 
-- Bash 4+ (macOS ships 3.x but the script uses only 3.x-compatible features)
+- Bash (the script uses only Bash 3.x-compatible features, so macOS's built-in Bash works)
 - Git
 - Docker, with the daemon running and your user able to talk to it
 - [hyperfine](https://github.com/sharkdp/hyperfine)
@@ -53,6 +62,16 @@ sudo apt install -y git docker.io jq
 sudo usermod -aG docker "$USER"   # then log out and back in
 ```
 
+### Docker Hub authentication
+
+The benchmark pulls base images and re-resolves metadata on cold runs. Without authentication, Docker Hub's rate limit (100 pulls per 6 hours) can cause failures during repeated runs. **Log in before benchmarking:**
+
+```bash
+docker login
+```
+
+A free Docker Hub account raises the limit to 200 pulls per 6 hours, which is sufficient for both profiles.
+
 ## Quick start
 
 ```bash
@@ -60,12 +79,16 @@ git clone https://github.com/cvidmar/go-ts-bench.git
 cd go-ts-bench
 chmod +x docker-bench.sh
 
+# Light profile (default)
 ./docker-bench.sh my-macbook-m2
+
+# Heavy profile
+BENCH_PROFILE=heavy ./docker-bench.sh my-macbook-m2
 ```
 
-The argument is a free-form machine label that ends up in the CSV. If omitted, the hostname is used. Results land in `~/docker-bench/results-<machine>-<timestamp>.csv`.
+The argument is a free-form machine label that ends up in the CSV. If omitted, the hostname is used. Results land in `~/docker-bench/results-<machine>-<profile>-<timestamp>.csv`.
 
-A full run takes roughly 15–40 minutes on a modern machine, more on a small VPS.
+A light run takes roughly 15–25 minutes; a heavy run takes 30–60 minutes on a modern machine, more on a small VPS.
 
 ## Configuration
 
@@ -73,11 +96,14 @@ Override any of these via environment variables:
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `BENCH_PROFILE` | `light` | `light` or `heavy` — selects project set and run counts |
 | `WORKDIR` | `$HOME/docker-bench` | Where repos are cloned and CSVs are written |
-| `RUNS_COLD` | `3` | Iterations per cold-build measurement |
-| `RUNS_WARM` | `5` | Iterations per warm-build measurement |
-| `CADDY_REF` | `v2.8.4` | Git ref (tag/branch/SHA) for Caddy |
-| `EXCALIDRAW_REF` | `v0.17.6` | Git ref for Excalidraw |
+| `RUNS_COLD` | `5` (light) / `3` (heavy) | Iterations per cold-build measurement |
+| `RUNS_WARM` | `8` (light) / `5` (heavy) | Iterations per warm-build measurement |
+| `SYNCTHING_REF` | `v2.0.16` | Git ref for Syncthing (light Go) |
+| `VERDACCIO_REF` | `v6.5.2` | Git ref for Verdaccio (light TS) |
+| `HUGO_REF` | `v0.139.0` | Git ref for Hugo (heavy Go) |
+| `DIRECTUS_REF` | `v11.17.4` | Git ref for Directus (heavy TS) |
 | `MACHINE_NAME` | hostname | Label used in the CSV (also accepts a positional arg) |
 | `BENCH_ARCH` | native | Target platform for `docker build` (e.g. `linux/arm64`, `linux/amd64`) |
 
@@ -85,10 +111,10 @@ Examples:
 
 ```bash
 # More iterations for a tighter stddev
-RUNS_COLD=5 RUNS_WARM=10 ./docker-bench.sh hetzner-ax41
+RUNS_COLD=8 RUNS_WARM=12 ./docker-bench.sh hetzner-ax41
 
-# Pin to different versions
-CADDY_REF=v2.7.6 EXCALIDRAW_REF=master ./docker-bench.sh dev-vm
+# Heavy profile with custom refs
+BENCH_PROFILE=heavy HUGO_REF=v0.140.0 ./docker-bench.sh dev-vm
 
 # Use a different work directory (e.g. a fast NVMe)
 WORKDIR=/mnt/nvme/bench ./docker-bench.sh workstation
@@ -110,7 +136,8 @@ One CSV row per project × scenario, with these columns:
 | `arch` | `arm64`, `x86_64`, etc. |
 | `ram_gb` | Total RAM, rounded |
 | `docker_version` | Server version |
-| `project` | `caddy` or `excalidraw` |
+| `profile` | `light` or `heavy` |
+| `project` | e.g. `syncthing`, `verdaccio`, `hugo`, `directus` |
 | `scenario` | `cold` or `warm` |
 | `commit` | Short SHA of what was actually built |
 | `runs` | Number of measured iterations |
@@ -155,7 +182,7 @@ Open `docker-bench.sh` and add a `benchmark` call near the bottom:
 benchmark "gitea" "https://github.com/go-gitea/gitea.git" "v1.22.3"
 ```
 
-The function takes `name`, `git_url`, and `git_ref`. The repo must have a `Dockerfile` at its root and a `COPY . ...`-style step somewhere for the warm-build cache buster to take effect. If your project's Dockerfile doesn't `COPY` the whole tree, you may need to adjust the `--prepare` line for the warm scenario.
+The function takes `name`, `git_url`, and `git_ref`. The repo must have a `Dockerfile` at its root and a `COPY . ...`-style step somewhere for the warm-build cache buster to take effect. Note that projects using a whitelist `.dockerignore` (e.g. `*` then `!src`) will ignore the `cache-buster` file — for those, you'll need to adjust the `--prepare` line to touch an actual source file instead.
 
 ## Sharing results
 

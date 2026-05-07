@@ -1,17 +1,22 @@
 #!/usr/bin/env bash
-# docker-bench.sh — benchmark cold/warm Docker builds for Caddy (Go) and
-# Excalidraw (TypeScript) on macOS and Linux. Writes one CSV per run.
+# docker-bench.sh — benchmark cold/warm Docker builds for Go and TypeScript
+# projects on macOS and Linux. Writes one CSV per run.
 #
 # Usage:
 #   ./docker-bench.sh [machine_name]
 #
 # Env overrides:
+#   BENCH_PROFILE   (default: light) — "light" or "heavy"
+#                     light: Syncthing (Go) + Verdaccio (TS), more runs
+#                     heavy: Hugo (Go) + Directus (TS), fewer runs
 #   WORKDIR         (default: $HOME/docker-bench)
-#   RUNS_COLD       (default: 3)
-#   RUNS_WARM       (default: 5)
-#   CADDY_REF       (default: v2.8.4)   — git tag/branch/sha to pin Caddy
-#   EXCALIDRAW_REF  (default: v0.17.6)  — git tag/branch/sha to pin Excalidraw
-#   BENCH_ARCH      (default: native)   — target platform for docker build
+#   RUNS_COLD       (default: 5 light, 3 heavy)
+#   RUNS_WARM       (default: 8 light, 5 heavy)
+#   SYNCTHING_REF   (default: v2.0.16)   — light Go project
+#   VERDACCIO_REF   (default: v6.5.2)    — light TS project
+#   HUGO_REF        (default: v0.139.0)  — heavy Go project
+#   DIRECTUS_REF    (default: v11.17.4)  — heavy TS project
+#   BENCH_ARCH      (default: native)    — target platform for docker build
 #                     e.g. linux/arm64, linux/amd64
 #
 # Requires: git, docker, hyperfine, jq
@@ -24,15 +29,40 @@ set -euo pipefail
 # ---------- configuration ----------
 MACHINE_NAME="${1:-${MACHINE_NAME:-$(hostname -s 2>/dev/null || hostname)}}"
 WORKDIR="${WORKDIR:-$HOME/docker-bench}"
-RUNS_COLD="${RUNS_COLD:-3}"
-RUNS_WARM="${RUNS_WARM:-5}"
-CADDY_REF="${CADDY_REF:-v2.8.4}"
-EXCALIDRAW_REF="${EXCALIDRAW_REF:-v0.17.6}"
+BENCH_PROFILE="${BENCH_PROFILE:-light}"
 BENCH_ARCH="${BENCH_ARCH:-}"
+
+# Profile-specific defaults
+case "$BENCH_PROFILE" in
+  light)
+    RUNS_COLD="${RUNS_COLD:-5}"
+    RUNS_WARM="${RUNS_WARM:-8}"
+    GO_PROJECT=syncthing
+    GO_URL="https://github.com/syncthing/syncthing.git"
+    GO_REF="${SYNCTHING_REF:-v2.0.16}"
+    TS_PROJECT=verdaccio
+    TS_URL="https://github.com/verdaccio/verdaccio.git"
+    TS_REF="${VERDACCIO_REF:-v6.5.2}"
+    ;;
+  heavy)
+    RUNS_COLD="${RUNS_COLD:-3}"
+    RUNS_WARM="${RUNS_WARM:-5}"
+    GO_PROJECT=hugo
+    GO_URL="https://github.com/gohugoio/hugo.git"
+    GO_REF="${HUGO_REF:-v0.139.0}"
+    TS_PROJECT=directus
+    TS_URL="https://github.com/directus/directus.git"
+    TS_REF="${DIRECTUS_REF:-v11.17.4}"
+    ;;
+  *)
+    echo "ERROR: unknown BENCH_PROFILE '$BENCH_PROFILE' (use 'light' or 'heavy')" >&2
+    exit 1
+    ;;
+esac
 
 mkdir -p "$WORKDIR"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-RESULTS_CSV="$WORKDIR/results-${MACHINE_NAME}-${TIMESTAMP}.csv"
+RESULTS_CSV="$WORKDIR/results-${MACHINE_NAME}-${BENCH_PROFILE}-${TIMESTAMP}.csv"
 
 # ---------- platform detection ----------
 uname_s=$(uname -s)
@@ -113,6 +143,9 @@ cat <<EOF
  Target:    ${BENCH_ARCH:-native}
  RAM:       ${RAM} GB
  Docker:    $DOCKER_VER
+ Profile:   $BENCH_PROFILE
+ Go:        $GO_PROJECT ($GO_REF)
+ TS:        $TS_PROJECT ($TS_REF)
  Runs:      cold=$RUNS_COLD, warm=$RUNS_WARM
  Workdir:   $WORKDIR
  Output:    $RESULTS_CSV
@@ -120,7 +153,7 @@ cat <<EOF
 EOF
 
 # ---------- CSV header ----------
-echo "machine,os,cpu,cores,arch,ram_gb,docker_version,project,scenario,commit,runs,median_s,mean_s,stddev_s,min_s,max_s" \
+echo "machine,os,cpu,cores,arch,ram_gb,docker_version,profile,project,scenario,commit,runs,median_s,mean_s,stddev_s,min_s,max_s" \
   > "$RESULTS_CSV"
 
 # ---------- helpers ----------
@@ -156,9 +189,9 @@ run_scenario() {
   min=$(jq    -r '.results[0].min'    "$json")
   max=$(jq    -r '.results[0].max'    "$json")
 
-  printf '%s,"%s","%s",%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+  printf '%s,"%s","%s",%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
     "$MACHINE_NAME" "$OS" "$CPU" "$CORES" "$ARCH" "$RAM" "$DOCKER_VER" \
-    "$project" "$scenario" "$commit" "$runs" \
+    "$BENCH_PROFILE" "$project" "$scenario" "$commit" "$runs" \
     "$median" "$mean" "$stddev" "$min" "$max" \
     >> "$RESULTS_CSV"
 }
@@ -182,27 +215,26 @@ benchmark() {
   # isn't dominated by network. `docker builder prune` later only clears
   # build cache, not pulled base images.
   echo ">> warmup build (untimed, pulls base layers)..."
-  docker build "${PLATFORM_FLAG[@]}" -t "bench-${name}-warmup" . >/dev/null 2>&1 || \
+  docker build ${PLATFORM_FLAG[@]+"${PLATFORM_FLAG[@]}"} -t "bench-${name}-warmup" . >/dev/null 2>&1 || \
     echo "  (warmup build failed; cold runs may include base-image pull time)"
 
   # Cold: build cache wiped, base images retained.
   run_scenario "$name" "cold" "$commit" "$RUNS_COLD" \
-    "docker builder prune -af >/dev/null" \
-    "docker build ${PLATFORM_FLAG[*]} --no-cache -t bench-${name} ."
+    "docker builder prune -f >/dev/null" \
+    "docker build ${PLATFORM_FLAG[*]+${PLATFORM_FLAG[*]}} --no-cache -t bench-${name} ."
 
   # Warm: bust the final COPY layer with a tiny file change so source-dependent
-  # steps re-run; dependency layers stay cached. Works for any Dockerfile that
-  # does `COPY . ...` (both Caddy and Excalidraw do).
+  # steps re-run; dependency layers stay cached.
   run_scenario "$name" "warm" "$commit" "$RUNS_WARM" \
-    "date > .cache-buster" \
-    "docker build ${PLATFORM_FLAG[*]} -t bench-${name} ."
+    "date > cache-buster" \
+    "docker build ${PLATFORM_FLAG[*]+${PLATFORM_FLAG[*]}} -t bench-${name} ."
 
-  rm -f .cache-buster
+  rm -f cache-buster
 }
 
 # ---------- run ----------
-benchmark "caddy"      "https://github.com/caddyserver/caddy.git"     "$CADDY_REF"
-benchmark "excalidraw" "https://github.com/excalidraw/excalidraw.git" "$EXCALIDRAW_REF"
+benchmark "$GO_PROJECT" "$GO_URL" "$GO_REF"
+benchmark "$TS_PROJECT" "$TS_URL" "$TS_REF"
 
 echo ""
 echo "============================================================"
