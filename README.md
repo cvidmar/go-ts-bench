@@ -56,8 +56,8 @@ sudo usermod -aG docker "$USER"   # then log out and back in
 ## Quick start
 
 ```bash
-git clone https://github.com/<you>/docker-build-bench.git
-cd docker-build-bench
+git clone https://github.com/cvidmar/go-ts-bench.git
+cd go-ts-bench
 chmod +x docker-bench.sh
 
 ./docker-bench.sh my-macbook-m2
