@@ -56,7 +56,7 @@ sudo usermod -aG docker "$USER"   # then log out and back in
 ## Quick start
 
 ```bash
-git clone https://github.com/cvidmar/docker-build-bench.git
+git clone https://github.com/cvidmar/go-ts-bench.git
 cd docker-build-bench
 chmod +x docker-bench.sh
 
