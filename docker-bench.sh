@@ -11,6 +11,8 @@
 #   RUNS_WARM       (default: 5)
 #   CADDY_REF       (default: v2.8.4)   — git tag/branch/sha to pin Caddy
 #   EXCALIDRAW_REF  (default: v0.17.6)  — git tag/branch/sha to pin Excalidraw
+#   BENCH_ARCH      (default: native)   — target platform for docker build
+#                     e.g. linux/arm64, linux/amd64
 #
 # Requires: git, docker, hyperfine, jq
 #   macOS:  brew install git hyperfine jq   (Docker Desktop installs docker)
@@ -26,6 +28,7 @@ RUNS_COLD="${RUNS_COLD:-3}"
 RUNS_WARM="${RUNS_WARM:-5}"
 CADDY_REF="${CADDY_REF:-v2.8.4}"
 EXCALIDRAW_REF="${EXCALIDRAW_REF:-v0.17.6}"
+BENCH_ARCH="${BENCH_ARCH:-}"
 
 mkdir -p "$WORKDIR"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
@@ -78,6 +81,10 @@ CORES=$(core_count)
 RAM=$(ram_gb)
 ARCH=$(uname -m)
 DOCKER_VER=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo "unknown")
+PLATFORM_FLAG=()
+if [ -n "$BENCH_ARCH" ]; then
+  PLATFORM_FLAG=(--platform "$BENCH_ARCH")
+fi
 
 # ---------- preflight ----------
 for cmd in git docker hyperfine jq; do
@@ -103,6 +110,7 @@ cat <<EOF
  CPU:       $CPU
  Cores:     $CORES
  Arch:      $ARCH
+ Target:    ${BENCH_ARCH:-native}
  RAM:       ${RAM} GB
  Docker:    $DOCKER_VER
  Runs:      cold=$RUNS_COLD, warm=$RUNS_WARM
@@ -174,20 +182,20 @@ benchmark() {
   # isn't dominated by network. `docker builder prune` later only clears
   # build cache, not pulled base images.
   echo ">> warmup build (untimed, pulls base layers)..."
-  docker build -t "bench-${name}-warmup" . >/dev/null 2>&1 || \
+  docker build "${PLATFORM_FLAG[@]}" -t "bench-${name}-warmup" . >/dev/null 2>&1 || \
     echo "  (warmup build failed; cold runs may include base-image pull time)"
 
   # Cold: build cache wiped, base images retained.
   run_scenario "$name" "cold" "$commit" "$RUNS_COLD" \
     "docker builder prune -af >/dev/null" \
-    "docker build --no-cache -t bench-${name} ."
+    "docker build ${PLATFORM_FLAG[*]} --no-cache -t bench-${name} ."
 
   # Warm: bust the final COPY layer with a tiny file change so source-dependent
   # steps re-run; dependency layers stay cached. Works for any Dockerfile that
   # does `COPY . ...` (both Caddy and Excalidraw do).
   run_scenario "$name" "warm" "$commit" "$RUNS_WARM" \
     "date > .cache-buster" \
-    "docker build -t bench-${name} ."
+    "docker build ${PLATFORM_FLAG[*]} -t bench-${name} ."
 
   rm -f .cache-buster
 }

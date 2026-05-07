@@ -79,6 +79,7 @@ Override any of these via environment variables:
 | `CADDY_REF` | `v2.8.4` | Git ref (tag/branch/SHA) for Caddy |
 | `EXCALIDRAW_REF` | `v0.17.6` | Git ref for Excalidraw |
 | `MACHINE_NAME` | hostname | Label used in the CSV (also accepts a positional arg) |
+| `BENCH_ARCH` | native | Target platform for `docker build` (e.g. `linux/arm64`, `linux/amd64`) |
 
 Examples:
 
@@ -91,6 +92,9 @@ CADDY_REF=v2.7.6 EXCALIDRAW_REF=master ./docker-bench.sh dev-vm
 
 # Use a different work directory (e.g. a fast NVMe)
 WORKDIR=/mnt/nvme/bench ./docker-bench.sh workstation
+
+# Build for amd64 on Apple Silicon (runs under emulation)
+BENCH_ARCH=linux/amd64 ./docker-bench.sh m2-emulated
 ```
 
 ## Output format
@@ -133,7 +137,7 @@ The cold vs. warm gap tells you something different from absolute speed: it's ro
 
 **Architecture matters.** On Apple Silicon, Docker builds for `arm64` by default. Comparing those numbers directly to x86 Linux is comparing different binaries on different ISAs. Either:
 - Accept the difference and note `arch` in your write-up (the CSV records it), or
-- Force `--platform=linux/amd64` everywhere — Apple Silicon will then run under emulation and look much slower, which is informative but a different question.
+- Force a common platform with `BENCH_ARCH=linux/amd64` — Apple Silicon will then run under emulation and look much slower, which is informative but a different question.
 
 **Run on an idle machine.** Browsers, Slack, Spotify, Time Machine, `apt unattended-upgrades`, and antivirus scans all add noise that easily swamps real hardware differences. Quit everything you can before benchmarking.
 
