@@ -105,6 +105,9 @@ Override any of these via environment variables:
 | `HUGO_REF` | `v0.139.0` | Git ref for Hugo (heavy Go) |
 | `DIRECTUS_REF` | `v11.17.4` | Git ref for Directus (heavy TS) |
 | `MACHINE_NAME` | hostname | Label used in the CSV (also accepts a positional arg) |
+| `BENCH_SCENARIO` | `both` | `cold`, `warm`, or `both` - which scenarios to benchmark |
+| `BENCH_PROJECT` | `all` | `go`, `ts`, or `all` - which project to benchmark |
+| `BENCH_DEBUG` | `0` | Set to `1` to run a single build with full Docker output (no benchmarking) |
 | `BENCH_ARCH` | native | Target platform for `docker build` (e.g. `linux/arm64`, `linux/amd64`) |
 
 Examples:
@@ -121,6 +124,12 @@ WORKDIR=/mnt/nvme/bench ./docker-bench.sh workstation
 
 # Build for amd64 on Apple Silicon (runs under emulation)
 BENCH_ARCH=linux/amd64 ./docker-bench.sh m2-emulated
+
+# Only run warm benchmarks for the Go project
+BENCH_SCENARIO=warm BENCH_PROJECT=go ./docker-bench.sh my-macbook-m2
+
+# Debug a failing build with full Docker output
+BENCH_PROFILE=heavy BENCH_PROJECT=ts BENCH_DEBUG=1 ./docker-bench.sh
 ```
 
 ## Output format

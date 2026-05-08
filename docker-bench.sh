@@ -17,6 +17,9 @@
 #   HUGO_REF        (default: v0.139.0)  — heavy Go project
 #   DIRECTUS_REF    (default: v11.17.4)  — heavy TS project
 #   BENCH_SCENARIO  (default: both) — "cold", "warm", or "both"
+#   BENCH_PROJECT   (default: all) — run only "go" or "ts" project
+#   BENCH_DEBUG     (default: 0) — set to 1 to run a single build with
+#                     full Docker output (no benchmarking) for debugging
 #   BENCH_ARCH      (default: native)    — target platform for docker build
 #                     e.g. linux/arm64, linux/amd64
 #
@@ -33,11 +36,21 @@ WORKDIR="${WORKDIR:-$HOME/docker-bench}"
 BENCH_PROFILE="${BENCH_PROFILE:-light}"
 BENCH_ARCH="${BENCH_ARCH:-}"
 BENCH_SCENARIO="${BENCH_SCENARIO:-both}"
+BENCH_PROJECT="${BENCH_PROJECT:-all}"
+BENCH_DEBUG="${BENCH_DEBUG:-0}"
 
 case "$BENCH_SCENARIO" in
   cold|warm|both) ;;
   *)
     echo "ERROR: unknown BENCH_SCENARIO '$BENCH_SCENARIO' (use 'cold', 'warm', or 'both')" >&2
+    exit 1
+    ;;
+esac
+
+case "$BENCH_PROJECT" in
+  all|go|ts) ;;
+  *)
+    echo "ERROR: unknown BENCH_PROJECT '$BENCH_PROJECT' (use 'all', 'go', or 'ts')" >&2
     exit 1
     ;;
 esac
@@ -207,6 +220,27 @@ run_scenario() {
     >> "$RESULTS_CSV"
 }
 
+debug_build() {
+  local name="$1" url="$2" ref="$3"
+  echo ""
+  echo "============================================================"
+  echo " DEBUG BUILD: $name  (ref: $ref)"
+  echo "============================================================"
+  clone_or_update "$name" "$url" "$ref" >/dev/null
+  cd "$WORKDIR/$name"
+
+  if [ ! -f Dockerfile ]; then
+    echo "  ERROR: no Dockerfile at repo root for $name; skipping." >&2
+    return
+  fi
+
+  echo ">> docker build --no-cache --progress=plain ${PLATFORM_FLAG[*]+${PLATFORM_FLAG[*]}} -t bench-${name}-debug ."
+  echo ""
+  docker build --no-cache --progress=plain \
+    ${PLATFORM_FLAG[@]+"${PLATFORM_FLAG[@]}"} \
+    -t "bench-${name}-debug" .
+}
+
 benchmark() {
   local name="$1" url="$2" ref="$3"
   echo ""
@@ -253,13 +287,22 @@ benchmark() {
 }
 
 # ---------- run ----------
-benchmark "$GO_PROJECT" "$GO_URL" "$GO_REF"
-benchmark "$TS_PROJECT" "$TS_URL" "$TS_REF"
+run_fn=benchmark
+[[ "$BENCH_DEBUG" == 1 ]] && run_fn=debug_build
 
-echo ""
-echo "============================================================"
-echo " Done."
-echo "============================================================"
-cat "$RESULTS_CSV"
-echo ""
-echo "Saved to: $RESULTS_CSV"
+if [[ "$BENCH_PROJECT" == all || "$BENCH_PROJECT" == go ]]; then
+  "$run_fn" "$GO_PROJECT" "$GO_URL" "$GO_REF"
+fi
+if [[ "$BENCH_PROJECT" == all || "$BENCH_PROJECT" == ts ]]; then
+  "$run_fn" "$TS_PROJECT" "$TS_URL" "$TS_REF"
+fi
+
+if [[ "$BENCH_DEBUG" != 1 ]]; then
+  echo ""
+  echo "============================================================"
+  echo " Done."
+  echo "============================================================"
+  cat "$RESULTS_CSV"
+  echo ""
+  echo "Saved to: $RESULTS_CSV"
+fi
