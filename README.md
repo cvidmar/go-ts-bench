@@ -1,6 +1,6 @@
 # go-ts-bench
 
-A reproducible benchmark for Docker image builds across machines and operating systems. Runs real-world projects — one Go, one TypeScript — through cold and warm build scenarios and emits a CSV you can collate across machines.
+A reproducible benchmark for Docker image builds across machines and operating systems. Runs real-world projects - one Go, one TypeScript - through cold and warm build scenarios and emits a CSV you can collate across machines.
 
 Built to compare bare-metal macOS, bare-metal Linux, and Linux VPSes on equal footing, but works anywhere Docker and Bash run.
 
@@ -8,14 +8,14 @@ Built to compare bare-metal macOS, bare-metal Linux, and Linux VPSes on equal fo
 
 For each project, two scenarios:
 
-- **Cold build** — build cache wiped before each run (`docker builder prune -f`). Approximates a CI build from scratch. Base images are pulled once during an untimed warmup so the measurement isn't dominated by your network.
-- **Warm build** — build cache kept, but a `cache-buster` file is touched between runs to invalidate the final `COPY` layer. Approximates the inner-loop "I changed one file, rebuild" experience. Dependency layers stay cached; source-dependent steps re-run.
+- **Cold build** - build cache wiped before each run (`docker builder prune -f`). Approximates a CI build from scratch. Base images are pulled once during an untimed warmup so the measurement isn't dominated by your network.
+- **Warm build** - build cache kept, but a `cache-buster` file is touched between runs to invalidate the final `COPY` layer. Approximates the inner-loop "I changed one file, rebuild" experience. Dependency layers stay cached; source-dependent steps re-run.
 
 [Hyperfine](https://github.com/sharkdp/hyperfine) drives the timing and reports median, mean, stddev, min, and max across runs.
 
 ## Profiles
 
-The benchmark ships with two profiles — **light** (faster builds, more runs) and **heavy** (longer builds, fewer runs):
+The benchmark ships with two profiles - **light** (faster builds, more runs) and **heavy** (longer builds, fewer runs):
 
 | Profile | Go project | TS project | Cold runs | Warm runs |
 |---|---|---|---|---|
@@ -96,7 +96,7 @@ Override any of these via environment variables:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `BENCH_PROFILE` | `light` | `light` or `heavy` — selects project set and run counts |
+| `BENCH_PROFILE` | `light` | `light` or `heavy` - selects project set and run counts |
 | `WORKDIR` | `$HOME/docker-bench` | Where repos are cloned and CSVs are written |
 | `RUNS_COLD` | `5` (light) / `3` (heavy) | Iterations per cold-build measurement |
 | `RUNS_WARM` | `8` (light) / `5` (heavy) | Iterations per warm-build measurement |
@@ -156,7 +156,7 @@ Open `combined.csv` in a spreadsheet, pivot on `project` + `scenario`, sort by `
 
 Report the **median**, not the mean. A single network hiccup or background process can pull the mean badly off; the median is robust to outliers.
 
-The **stddev** matters as much as the median. A VPS with noisy neighbors can show a stddev of 20–30% of the median even when the median itself looks competitive — that's worth knowing. As a rough rule of thumb, anything above ~10% of the median means you should rerun, ideally at a different time of day.
+The **stddev** matters as much as the median. A VPS with noisy neighbors can show a stddev of 20–30% of the median even when the median itself looks competitive - that's worth knowing. As a rough rule of thumb, anything above ~10% of the median means you should rerun, ideally at a different time of day.
 
 The cold vs. warm gap tells you something different from absolute speed: it's roughly your dependency-fetch + compile cost. Two machines with similar warm times but very different cold times usually differ in network or disk, not CPU.
 
@@ -164,7 +164,7 @@ The cold vs. warm gap tells you something different from absolute speed: it's ro
 
 **Architecture matters.** On Apple Silicon, Docker builds for `arm64` by default. Comparing those numbers directly to x86 Linux is comparing different binaries on different ISAs. Either:
 - Accept the difference and note `arch` in your write-up (the CSV records it), or
-- Force a common platform with `BENCH_ARCH=linux/amd64` — Apple Silicon will then run under emulation and look much slower, which is informative but a different question.
+- Force a common platform with `BENCH_ARCH=linux/amd64` - Apple Silicon will then run under emulation and in some cases look much slower, but only in the Typescript benchmarks. This is expected and highlights a fundamental difference between Go and Node.js builds under Docker's cross-platform support. Go has native cross-compilation built into the compiler. When Docker builds with --platform linux/amd64 on arm64, the Go toolchain just sets GOARCH=amd64 and produces amd64 binaries directly on the native CPU. No emulation needed. The difference is essentially noise. In Typescript/Node.js there's no native cross-compilation. When you target linux/amd64 on arm64, Docker runs every Dockerfile instruction under QEMU userspace emulation: every npm install, every native addon compilation (node-gyp), every postinstall script runs as emulated x86_64. A 2x slowdown from QEMU is actually on the mild side; native module compilation (e.g. sharp, bcrypt, better-sqlite3) can be 3-5x slower under emulation.
 
 **Run on an idle machine.** Browsers, Slack, Spotify, Time Machine, `apt unattended-upgrades`, and antivirus scans all add noise that easily swamps real hardware differences. Quit everything you can before benchmarking.
 
@@ -182,7 +182,7 @@ Open `docker-bench.sh` and add a `benchmark` call near the bottom:
 benchmark "gitea" "https://github.com/go-gitea/gitea.git" "v1.22.3"
 ```
 
-The function takes `name`, `git_url`, and `git_ref`. The repo must have a `Dockerfile` at its root and a `COPY . ...`-style step somewhere for the warm-build cache buster to take effect. Note that projects using a whitelist `.dockerignore` (e.g. `*` then `!src`) will ignore the `cache-buster` file — for those, you'll need to adjust the `--prepare` line to touch an actual source file instead.
+The function takes `name`, `git_url`, and `git_ref`. The repo must have a `Dockerfile` at its root and a `COPY . ...`-style step somewhere for the warm-build cache buster to take effect. Note that projects using a whitelist `.dockerignore` (e.g. `*` then `!src`) will ignore the `cache-buster` file - for those, you'll need to adjust the `--prepare` line to touch an actual source file instead.
 
 ## Sharing results
 
