@@ -16,6 +16,7 @@
 #   VERDACCIO_REF   (default: v6.5.2)    — light TS project
 #   HUGO_REF        (default: v0.139.0)  — heavy Go project
 #   DIRECTUS_REF    (default: v11.17.4)  — heavy TS project
+#   BENCH_SCENARIO  (default: both) — "cold", "warm", or "both"
 #   BENCH_ARCH      (default: native)    — target platform for docker build
 #                     e.g. linux/arm64, linux/amd64
 #
@@ -31,6 +32,15 @@ MACHINE_NAME="${1:-${MACHINE_NAME:-$(hostname -s 2>/dev/null || hostname)}}"
 WORKDIR="${WORKDIR:-$HOME/docker-bench}"
 BENCH_PROFILE="${BENCH_PROFILE:-light}"
 BENCH_ARCH="${BENCH_ARCH:-}"
+BENCH_SCENARIO="${BENCH_SCENARIO:-both}"
+
+case "$BENCH_SCENARIO" in
+  cold|warm|both) ;;
+  *)
+    echo "ERROR: unknown BENCH_SCENARIO '$BENCH_SCENARIO' (use 'cold', 'warm', or 'both')" >&2
+    exit 1
+    ;;
+esac
 
 # Profile-specific defaults
 case "$BENCH_PROFILE" in
@@ -146,6 +156,7 @@ cat <<EOF
  Profile:   $BENCH_PROFILE
  Go:        $GO_PROJECT ($GO_REF)
  TS:        $TS_PROJECT ($TS_REF)
+ Scenario:  $BENCH_SCENARIO
  Runs:      cold=$RUNS_COLD, warm=$RUNS_WARM
  Workdir:   $WORKDIR
  Output:    $RESULTS_CSV
@@ -161,9 +172,9 @@ clone_or_update() {
   local name="$1" url="$2" ref="$3"
   local dir="$WORKDIR/$name"
   if [ ! -d "$dir/.git" ]; then
-    git clone --quiet "$url" "$dir"
+    GIT_CONFIG_GLOBAL=/dev/null git clone --quiet "$url" "$dir"
   fi
-  ( cd "$dir" && git fetch --tags --quiet --all || true )
+  ( cd "$dir" && GIT_CONFIG_GLOBAL=/dev/null git fetch --tags --quiet --all || true )
   if ! ( cd "$dir" && git checkout --quiet "$ref" ) 2>/dev/null; then
     echo "  WARNING: ref '$ref' not found for $name; using current HEAD." >&2
   fi
@@ -218,18 +229,27 @@ benchmark() {
   docker build ${PLATFORM_FLAG[@]+"${PLATFORM_FLAG[@]}"} -t "bench-${name}-warmup" . >/dev/null 2>&1 || \
     echo "  (warmup build failed; cold runs may include base-image pull time)"
 
-  # Cold: build cache wiped, base images retained.
-  run_scenario "$name" "cold" "$commit" "$RUNS_COLD" \
-    "docker builder prune -f >/dev/null" \
-    "docker build ${PLATFORM_FLAG[*]+${PLATFORM_FLAG[*]}} --no-cache -t bench-${name} ."
+  if [[ "$BENCH_SCENARIO" == cold || "$BENCH_SCENARIO" == both ]]; then
+    # Cold: build cache wiped, base images retained.
+    run_scenario "$name" "cold" "$commit" "$RUNS_COLD" \
+      "docker builder prune -f >/dev/null" \
+      "docker build ${PLATFORM_FLAG[*]+${PLATFORM_FLAG[*]}} --no-cache -t bench-${name} ."
+  fi
 
-  # Warm: bust the final COPY layer with a tiny file change so source-dependent
-  # steps re-run; dependency layers stay cached.
-  run_scenario "$name" "warm" "$commit" "$RUNS_WARM" \
-    "date > cache-buster" \
-    "docker build ${PLATFORM_FLAG[*]+${PLATFORM_FLAG[*]}} -t bench-${name} ."
+  if [[ "$BENCH_SCENARIO" == warm || "$BENCH_SCENARIO" == both ]]; then
+    # Prime the build cache for warm runs (cold scenario's --no-cache leaves
+    # the cache empty, so the first warm run would otherwise be a cold build).
+    echo ">> priming cache for warm runs..."
+    docker build ${PLATFORM_FLAG[@]+"${PLATFORM_FLAG[@]}"} -t "bench-${name}" . >/dev/null 2>&1
 
-  rm -f cache-buster
+    # Warm: bust the final COPY layer with a tiny file change so source-dependent
+    # steps re-run; dependency layers stay cached.
+    run_scenario "$name" "warm" "$commit" "$RUNS_WARM" \
+      "date > cache-buster" \
+      "docker build ${PLATFORM_FLAG[*]+${PLATFORM_FLAG[*]}} -t bench-${name} ."
+
+    rm -f cache-buster
+  fi
 }
 
 # ---------- run ----------
